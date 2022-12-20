@@ -34,9 +34,9 @@ class Calibrate:
     def detect_corners(self, size=(7, 6)):
         img = self.image.copy()
         img = cv.cvtColor(img, cv.COLOR_BGR2RGB)
-        cv.imshow('img', img)
-        cv.waitKey(0)
-        cv.destroyAllWindows()
+        # cv.imshow('img', img)
+        # cv.waitKey(0)
+        # cv.destroyAllWindows()
         # termination criteria
         criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
         # Arrays to store object points and image points from all the images.
@@ -74,7 +74,7 @@ if __name__ == '__main__':
     calib = Calibrate(read_img=False)
     while not rospy.is_shutdown():
         calib.recieve_img()
-        calib.detect_corners(size=(6, 9))
-        print("Input Any Key to Continue")
-        raw_input()
+        calib.detect_corners(size=(5, 8))
+        # print("Input Any Key to Continue")
+        # raw_input()
     cv.destroyAllWindows()

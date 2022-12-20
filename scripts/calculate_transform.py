@@ -16,44 +16,61 @@ class TransformCalulator:
     
     def __init__(self):
         not_transformed = False
-        rospy.Subscriber("/px_to_xyz", PoseArray, self.calcTransform)
+        txt = True
+        # rospy.Subscriber("/px_to_xyz", PoseArray, self.calcTransform)
         # self.ground_truth_pub = rospy.Publisher("/px_to_xyz", PoseArray, queue_size=1)
         # self.ground_truth_pub.publish(ground_truth_pose_arr)
 
         rospy.sleep(2)
         self.transformer_listener = tf.TransformListener()
         self.transformer_broadcaster = tf2_ros.StaticTransformBroadcaster()
-        if not_transformed:
-            with open("/home/zaferpc/abb_ws/src/abb_experimental/abb_irb120_moveit_config/launch/chess_corners_gt.yaml") as f:
-                self.ground_truth = yaml.load(f)
-            self.transform_from_link_6_to_tool(self.ground_truth)
-            print("PLEASE PASTE THE PRINTED POSES IN ground_truth.yaml, THEN PRESS ENTER")
-            raw_input()
-        with open("/home/zaferpc/abb_ws/src/abb_experimental/abb_irb120_moveit_config/launch/ground_truth.yaml") as f:
-            self.ground_truth = yaml.load(f)
-        
         ground_truth_list = [[], [], []]
-        for i, pose in enumerate(self.ground_truth['poses']):
-            ground_truth_list[0].append(pose['position']['x'])
-            ground_truth_list[1].append(pose['position']['y'])
-            ground_truth_list[2].append(pose['position']['z'])
+        if not txt:
+            if not_transformed:
+                with open("/home/zaferpc/abb_ws/src/abb_experimental/abb_irb120_moveit_config/launch/chess_corners_gt.yaml") as f:
+                    self.ground_truth = yaml.load(f)
+                self.transform_from_link_6_to_tool(self.ground_truth)
+                print("PLEASE PASTE THE PRINTED POSES IN ground_truth.yaml, THEN PRESS ENTER")
+                raw_input()
+            with open("/home/zaferpc/abb_ws/src/abb_experimental/abb_irb120_moveit_config/launch/ground_truth.yaml") as f:
+                self.ground_truth = yaml.load(f)
+                
+            for i, pose in enumerate(self.ground_truth['poses']):
+                ground_truth_list[0].append(pose['position']['x'])
+                ground_truth_list[1].append(pose['position']['y'])
+                ground_truth_list[2].append(pose['position']['z'])
+        else:
+            with open('/home/bass/ur5_rob_ws/src/calibration/rob.txt') as f:
+                for line in f.readlines():
+                    a_line = line.strip().split(',')
+                    a_line = list(map(lambda x:float(x), a_line))
+                    ground_truth_list[0].append(a_line[0])
+                    ground_truth_list[1].append(a_line[1])
+                    ground_truth_list[2].append(a_line[2])
         
         self.ground_truth_arr = np.array(ground_truth_list)             
 
-        ground_truth_pose_arr = self.convert_pose_yaml_to_pose_array(self.ground_truth)
+        # ground_truth_pose_arr = self.convert_pose_yaml_to_pose_array(self.ground_truth)
         
     def calcTransform(self, detected_msg):
         
         # calibrate or measure accuracy
         print("recalibrate or measure accuracy ? 1: recalibrate, else: measure accuracy")
         x = input()
-        if x == 1:
+        if x == '1':
             # capture the samples
             detected_list = [[], [], []]
-            for i, pose in enumerate(detected_msg.poses):
-                detected_list[0].append(pose.position.x)
-                detected_list[1].append(pose.position.y)
-                detected_list[2].append(pose.position.z)
+            # for i, pose in enumerate(detected_msg.poses):
+            #     detected_list[0].append(pose.position.x)
+            #     detected_list[1].append(pose.position.y)
+            #     detected_list[2].append(pose.position.z)
+            with open('/home/bass/ur5_rob_ws/src/calibration/cam.txt') as f:
+                for line in f.readlines():
+                    a_line = line.strip().split(',')
+                    a_line = list(map(lambda x:float(x), a_line))
+                    detected_list[0].append(a_line[0])
+                    detected_list[1].append(a_line[1])
+                    detected_list[2].append(a_line[2])
             detected_arr = np.array(detected_list)
             
             # calculate the transformation of the camera wrt the base_link
@@ -77,24 +94,24 @@ class TransformCalulator:
             self.transformer_broadcaster.sendTransform(static_transformStamped)
             
             # get the transformation of the camera wrt link_6
-            self.transformer_listener.waitForTransform(
-                "link_6", "calibrated_frame",  rospy.Time(), rospy.Duration(1))
-            translation, orientation = self.transformer_listener.lookupTransform(
-                "link_6", "calibrated_frame", rospy.Time())
+            # self.transformer_listener.waitForTransform(
+            #     "tool0", "calibrated_frame",  rospy.Time(), rospy.Duration(1))
+            # translation, orientation = self.transformer_listener.lookupTransform(
+            #     "tool0", "calibrated_frame", rospy.Time())
                         
-            # broadcast the transformation
-            static_transformStamped = TransformStamped()
-            static_transformStamped.header.stamp = rospy.Time.now()
-            static_transformStamped.header.frame_id = "link_6"
-            static_transformStamped.child_frame_id = "calibrated_frame"
-            static_transformStamped.transform.translation.x = translation[0]
-            static_transformStamped.transform.translation.y = translation[1]
-            static_transformStamped.transform.translation.z = translation[2]
-            static_transformStamped.transform.rotation.x = orientation[0]
-            static_transformStamped.transform.rotation.y = orientation[1]
-            static_transformStamped.transform.rotation.z = orientation[2]
-            static_transformStamped.transform.rotation.w = orientation[3]
-            self.transformer_broadcaster.sendTransform(static_transformStamped)
+            # # broadcast the transformation
+            # static_transformStamped = TransformStamped()
+            # static_transformStamped.header.stamp = rospy.Time.now()
+            # static_transformStamped.header.frame_id = "tool0"
+            # static_transformStamped.child_frame_id = "calibrated_frame"
+            # static_transformStamped.transform.translation.x = translation[0]
+            # static_transformStamped.transform.translation.y = translation[1]
+            # static_transformStamped.transform.translation.z = translation[2]
+            # static_transformStamped.transform.rotation.x = orientation[0]
+            # static_transformStamped.transform.rotation.y = orientation[1]
+            # static_transformStamped.transform.rotation.z = orientation[2]
+            # static_transformStamped.transform.rotation.w = orientation[3]
+            # self.transformer_broadcaster.sendTransform(static_transformStamped)
             
             print(translation)
             print(orientation)
@@ -195,5 +212,6 @@ class TransformCalulator:
             
 if __name__ == "__main__":
     rospy.init_node("transform_calculator")
-    TransformCalulator()
-    rospy.spin()
+    tc = TransformCalulator()
+    tc.calcTransform(None)
+    # rospy.spin()
