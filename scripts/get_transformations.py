@@ -10,7 +10,7 @@ from ros_numpy import numpify
 from robot_helpers.srv import CreateFrameAtPose, LookupTransform
 from geometry_msgs.msg import Pose
 from std_msgs.msg import String
-from tf.transformations import quaternion_from_euler, quaternion_matrix, quaternion_from_matrix, euler_matrix, rotation_matrix
+from tf.transformations import quaternion_from_euler, quaternion_matrix, quaternion_from_matrix, euler_matrix, rotation_matrix, euler_from_quaternion
 from math import sin, cos
 
 
@@ -34,7 +34,12 @@ class CameraInfoReader:
     self.create_camera = False
     
     self.detected_base = [[ 0.08195365, -0.00050111, -0.14764314], [-0.50428208, -0.49966274, -0.49110353, -0.50483071]]
-    self.create_frames(np.array(self.detected_base[0]), np.array(self.detected_base[1]), 'aruco_base', 'base_link', quat=True)
+    trans = np.array(self.detected_base[0])
+    quat = np.array(self.detected_base[1])
+    euler_ = euler_from_quaternion(quat)
+    print(trans)
+    print(euler_)
+    # self.create_frames(trans, quat, 'aruco_base', 'base_link', quat=True)
 
     self.mode = None
     self.started = False
@@ -89,6 +94,9 @@ class CameraInfoReader:
     elif val == ord('p'):
       gc_t, gc_r = self.get_transform('base_link', 'detected_base')
       print(gc_t, gc_r)
+      euler_ = euler_from_quaternion(gc_r)
+      print(gc_t)
+      print(euler_)
     elif val == ord('b'):
       self.create_camera = True
       self.data_to_use = '1'
