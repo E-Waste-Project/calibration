@@ -7,10 +7,10 @@ import numpy as np
 import cv2
 from ros_numpy import numpify
 
-from robot_helpers.srv import CreateFrameAtPose
+from robot_helpers.srv import CreateFrameAtPose, LookupTransform
 from geometry_msgs.msg import Pose
 from std_msgs.msg import String
-from tf.transformations import quaternion_from_euler, quaternion_matrix, quaternion_from_matrix, euler_matrix
+from tf.transformations import quaternion_from_euler, quaternion_matrix, quaternion_from_matrix, euler_matrix, rotation_matrix
 from math import sin, cos
 
 
@@ -31,8 +31,12 @@ class CameraInfoReader:
     self.trackbar_limits = {'x': 500, 'rx': 500,
                             'y': 500, 'ry': 500,
                             'z': 500, 'rz': 500}
+    self.create_camera = False
+    
+    self.detected_base = [[ 0.08195365, -0.00050111, -0.14764314], [-0.50428208, -0.49966274, -0.49110353, -0.50483071]]
+    self.create_frames(np.array(self.detected_base[0]), np.array(self.detected_base[1]), 'aruco_base', 'base_link', quat=True)
 
-    self.mode = 's'
+    self.mode = None
     self.started = False
     self.collection_request_publisher = rospy.Publisher('/collect_data_request', String, queue_size=1)
     rospy.Subscriber('/camera/color/image_raw', Image, self.image_callback)
@@ -63,23 +67,31 @@ class CameraInfoReader:
       image = ref_frame
     elif self.mode == 'm':
       self.adjust_frame_manually()
-    elif self.mode == 'c':
-      print("calculating hand eye transformation")
-      self.calculate_hand_eye_transformation()
-      self.mode = 's'
-    elif self.mode == 'a':
-      print("sending collection request")
-      self.collection_request_publisher.publish(String('collect'))
-      self.mode = 's'
     cv2.imshow(self.win_name, image)
     val = cv2.waitKey(10) & 0xFF
     if val == ord('a'):
-      self.mode = 'a'
+      print("sending collection request")
+      self.collection_request_publisher.publish(String('collect'))
     elif val == ord('c'):
-      self.mode = 'c'
+      print("calculating hand eye transformation")
+      self.calculate_hand_eye_transformation()
     elif val == ord('m'):
       self.mode = 'm'
     elif val == ord('s'):
+      self.data_to_use = '4'
+      self.mode = 's'
+    elif val == ord('r'):
+      gc_t, gc_r = self.get_transform('marker_3', 'camera_color_optical_frame') # gribber wrt camera
+      self.create_frames(gc_t, gc_r, 'camera_color_optical_frame', 'grip_palm', quat=True)
+    elif val == ord('f'):
+      self.data_to_use = '1'
+      self.mode = 's'
+    elif val == ord('p'):
+      gc_t, gc_r = self.get_transform('base_link', 'detected_base')
+      print(gc_t, gc_r)
+    elif val == ord('b'):
+      self.create_camera = True
+      self.data_to_use = '1'
       self.mode = 's'
       
   def adjust_frame_manually(self):
@@ -93,7 +105,7 @@ class CameraInfoReader:
     self.trackbar_limits = original_vals
     quat = quaternion_from_euler(vals['rx'], vals['ry'], vals['rz'])
     trans = [vals['x'], vals['y'], vals['z']]
-    self.create_frames(trans, quat,'adjusted_frame', 'marker_3',quat=True)
+    self.create_frames(trans, quat,'camera_color_optical_frame', 'marker_3',quat=True)
     
   
   def rodrigues_to_quaternion(self, rvec):
@@ -104,6 +116,17 @@ class CameraInfoReader:
       qz = az * sin(angle/2)
       qw = cos(angle/2)
       return np.array([qx, qy, qz, qw])
+  
+  def quaternion_to_rodrigues(self, quat):
+    qx, qy, qz, w = quat[0], quat[1], quat[2], quat[3]
+    angle = np.arccos(w)*2
+    ax = qx / sin(angle/2)
+    ay = qy / sin(angle/2)
+    az = qz / sin(angle/2)
+    rx = ax * angle
+    ry = ay * angle
+    rz = az * angle
+    return np.array([rx, ry, rz])
     
   
   def pose_esitmation(self, frame, aruco_dict_type, matrix_coefficients, distortion_coefficients):
@@ -151,52 +174,41 @@ class CameraInfoReader:
               id_2 = np.array(tvec)
             if self.marker_data[self.data_to_use]['name'] == 'rob':
               if tvec[2] > 1:
-                self.create_frames(tvec, rvec, 'detected_base', 'camera_color_optical_frame')
+                if self.create_camera:
+                  quat = self.rodrigues_to_quaternion(rvec)
+                  rot_mat = quaternion_matrix(quat)
+                  rot_mat[:3,-1] = np.copy(tvec)
+                  new_rot_mat = np.linalg.inv(rot_mat)
+                  new_tvec = new_rot_mat[:3, -1]
+                  new_mat = np.eye(4)
+                  new_mat[:3,:3] = np.copy(new_rot_mat[:3,:3])
+                  new_quat = quaternion_from_matrix(new_mat)
+                  # print(new_tvec)
+                  # print(new_quat)
+                  self.create_frames(new_tvec, new_quat, 'camera_color_optical_frame', 'aruco_base',quat=True)
+                else:
+                  self.create_frames(tvec, rvec, 'detected_base', 'camera_color_optical_frame')
             if self.marker_data[self.data_to_use]['name'] == 'big_grip':
               if tvec[2] <= 1.2:
                 # print('Here')
                 self.create_frames(tvec, rvec, 'marker_3', 'camera_color_optical_frame')
-              if tvec[2] > 1.2 and False:
-                # print('Here')
-                quat = self.rodrigues_to_quaternion(rvec)
-                mat = quaternion_matrix(quat)[:3,:3]
-                # rotate
-                rot_mat = euler_matrix(-np.pi/2, 0, -np.pi/2)
-                old_mat = np.eye(4)
-                old_mat[:3,:3] = mat
-                old_mat[:3,-1] = tvec
-                # mat[0] = old_mat[2,:3]
-                # mat[2] = old_mat[1,:3]
-                # mat[1] = old_mat[0,:3]
-                # tvec[0] = old_mat[2,3]
-                # tvec[2] = old_mat[1,3]
-                # tvec[1] = old_mat[0,3]
-                # rotated_mat = np.dot(rot_mat, old_mat)
-                # tvec = rotated_mat[:3,-1].flatten()
-                # mat = old_mat[:3,:3]
-                
-                # invert
-                mat = mat.T
-                tvec = -np.dot(mat, tvec.reshape((3,1))).flatten()
-                old_mat = np.eye(4)
-                old_mat[:3,:3] = mat
-                old_mat[:3,-1] = tvec
-                # mat[0] = old_mat[2,:3]
-                # mat[2] = old_mat[1,:3]
-                # mat[1] = old_mat[0,:3]
-                # tvec[0] = old_mat[2,3]
-                # tvec[2] = old_mat[1,3]
-                # tvec[1] = old_mat[0,3]
-                rotated_mat = np.dot(rot_mat, old_mat)
-                tvec = rotated_mat[:3,-1].flatten()
-                # mat = old_mat[:3,:3]
-                new_mat = np.eye(4)
-                new_mat[:3,:3] = rotated_mat
-                quat = quaternion_from_matrix(new_mat)
-                # self.create_frames(tvec, quat, 'camera_color_optical_frame', 'base_link', quat=True)
             if self.marker_data[self.data_to_use]['name']== 'small_single_grip':
-              if tvec[2] <= 1:
-                self.create_frames(tvec, rvec, 'marker_2', 'camera_color_optical_frame')
+              if tvec[2] <= 1.2:
+                quat = self.rodrigues_to_quaternion(rvec)
+                mat = quaternion_matrix(quat)
+                rot_mat2 = rotation_matrix(np.pi/2, [0, 0, 1])
+                rot_mat1 = rotation_matrix(np.pi/2, [1, 0, 0])
+                rot_mat1[:3,-1] = np.array([0, 0, -0.05])
+                mat[:3,-1] = tvec
+                new_mat = np.dot(mat, rot_mat2)
+                new_mat = np.dot(new_mat, rot_mat1)
+                new_tvec = np.copy(new_mat[:3,-1])
+                new_mat[:3, -1] = np.zeros(3,)
+                new_quat = quaternion_from_matrix(new_mat)
+                new_rvec = self.quaternion_to_rodrigues(new_quat)
+                cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients, new_rvec, tvec, 0.1)
+                # self.create_frames(tvec, quat, 'marker_3', 'camera_color_optical_frame', quat=True)
+                self.create_frames(new_tvec, new_quat, 'marker_3', 'camera_color_optical_frame', quat=True)
         
         if self.marker_data[self.data_to_use]['name'] == 'grip':
           print("horizontal  = ", np.linalg.norm(id_4 - id_3))
@@ -246,6 +258,24 @@ class CameraInfoReader:
             a_line = list(map(lambda x:float(x), a_line))
             data.append(a_line)
     return data
+
+  def get_transform(self, target_frame, source_frame):
+    transformation_data = {
+        "target_frame": String(target_frame),
+        "source_frame": String(source_frame),
+    }
+    response = self.service_req(
+        "/lookup_transform", LookupTransform, inputs=transformation_data
+    )
+    frame = response.frame_pose
+    x = frame.position.x
+    y = frame.position.y
+    z = frame.position.z
+    qx = frame.orientation.x
+    qy = frame.orientation.y
+    qz = frame.orientation.z
+    qw = frame.orientation.w
+    return np.array([x, y, z]), np.array([qx, qy, qz, qw])
   
   def calculate_hand_eye_transformation(self):
       tool_to_base = self.read_data_files('/home/bass/tool_to_base_transformations.txt')
