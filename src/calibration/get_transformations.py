@@ -16,14 +16,9 @@ from math import sin, cos
 
 
 class CameraInfoReader:
-  def __init__(self):
-    rospy.init_node('get_transformations')
-    self.data_to_use = input('choose number from 1.rob, 2.grip, 3.big_grip, 4.small_single_grip\n')
-    print('you chose {}'.format(self.data_to_use))
-    # self.data_to_use = 'rob'
-    # self.data_to_use = 'grip'
-    # self.data_to_use = 'big_grip'
-    # self.data_to_use = 'small_single_grip'
+  def __init__(self, frame='camera', data_to_use='1'):
+    self.frame = frame
+    self.data_to_use = data_to_use
     self.marker_data = {'1':{'name':'rob', 'sz':0.1, 'dict':cv2.aruco.DICT_5X5_100},
                    '2':{'name':'grip', 'sz':0.028, 'dict':cv2.aruco.DICT_4X4_100},
                    '3':{'name':'big_grip', 'sz':0.1, 'dict':cv2.aruco.DICT_5X5_100},
@@ -37,20 +32,19 @@ class CameraInfoReader:
     trans = np.array(self.detected_base[0])
     quat = np.array(self.detected_base[1])
     euler_ = euler_from_quaternion(quat)
-    print(trans)
-    print(euler_)
+    # print(trans)
+    # print(euler_)
     # self.create_frames(trans, quat, 'aruco_base', 'base_link', quat=True)
 
     self.mode = None
     self.started = False
-    self.collection_request_publisher = rospy.Publisher('/collect_data_request', String, queue_size=1)
-    rospy.Subscriber('/camera/color/image_raw', Image, self.image_callback)
-    
+    self.collection_request_publisher = rospy.Publisher('/collect_data_request', String, queue_size=1)    
   
   def get_parameters(self):
-    msg = rospy.wait_for_message('/camera/color/camera_info', CameraInfo)
+    msg = rospy.wait_for_message('/' + self.frame + '/color/camera_info', CameraInfo)
     self.K = np.array(msg.K).reshape(3, 3)
     self.D = np.array(msg.D).reshape(5, 1)
+    print(self.K)
     np.save('/home/bass/ur5_rob_ws/src/perception/config/calibration_matrix.npy', self.K)
     np.save('/home/bass/ur5_rob_ws/src/perception/config/distortion_coefficients.npy', self.D)
     # rospy.signal_shutdown('Done')
@@ -86,13 +80,13 @@ class CameraInfoReader:
       self.data_to_use = '4'
       self.mode = 's'
     elif val == ord('r'):
-      gc_t, gc_r = self.get_transform('marker_3', 'camera_color_optical_frame') # gribber wrt camera
-      self.create_frames(gc_t, gc_r, 'camera_color_optical_frame', 'grip_palm', quat=True)
+      gc_t, gc_r = self.get_transform('marker_3', self.frame + '_color_optical_frame') # gribber wrt camera
+      self.create_frames(gc_t, gc_r, self.frame + '_color_optical_frame', 'grip_palm', quat=True)
     elif val == ord('f'):
       self.data_to_use = '1'
       self.mode = 's'
     elif val == ord('p'):
-      gc_t, gc_r = self.get_transform('base_link', 'detected_base')
+      gc_t, gc_r = self.get_transform('base_link', 'aruco_base')
       print(gc_t, gc_r)
       euler_ = euler_from_quaternion(gc_r)
       print(gc_t)
@@ -113,7 +107,7 @@ class CameraInfoReader:
     self.trackbar_limits = original_vals
     quat = quaternion_from_euler(vals['rx'], vals['ry'], vals['rz'])
     trans = [vals['x'], vals['y'], vals['z']]
-    self.create_frames(trans, quat,'camera_color_optical_frame', 'marker_3',quat=True)
+    self.create_frames(trans, quat,self.frame + '_color_optical_frame', 'marker_3',quat=True)
     
   
   def rodrigues_to_quaternion(self, rvec):
@@ -135,6 +129,29 @@ class CameraInfoReader:
     ry = ay * angle
     rz = az * angle
     return np.array([rx, ry, rz])
+  
+  def get_aruco_pose(self, frame, aruco_dict_type, matrix_coefficients, distortion_coefficients, marker_sz):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    cv2.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
+    parameters = cv2.aruco.DetectorParameters_create()
+    corners, ids, rejected_img_points = cv2.aruco.detectMarkers(gray, cv2.aruco_dict,parameters=parameters)
+    rvecs, tvecs = [], []
+    # If markers are detected
+    if len(corners) > 0:
+        for i in range(0, len(ids)):
+            # Estimate pose of each marker and return the values rvec and tvec---(different from those of camera coefficients)
+            rvec, tvec, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], marker_sz, matrix_coefficients,
+                                                                        distortion_coefficients)
+            # Draw a square around the markers
+            cv2.aruco.drawDetectedMarkers(frame, corners) 
+
+            # Draw Axis
+            cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.1)
+            tvec = np.array(tvec).flatten()
+            rvec = np.array(rvec).flatten()
+            tvecs.append(tvec)
+            rvecs.append(rvec)
+        return frame, tvecs, rvecs
     
   
   def pose_esitmation(self, frame, aruco_dict_type, matrix_coefficients, distortion_coefficients):
@@ -152,7 +169,6 @@ class CameraInfoReader:
     cv2.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
     parameters = cv2.aruco.DetectorParameters_create()
 
-
     corners, ids, rejected_img_points = cv2.aruco.detectMarkers(gray, cv2.aruco_dict,parameters=parameters)
     
     # If markers are detected
@@ -168,18 +184,7 @@ class CameraInfoReader:
             cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, 0.1)
             tvec = np.array(tvec).flatten()
             rvec = np.array(rvec).flatten()
-            # print('rvec {}: {}'.format(ids[i],rvec))
-            # print('tvec {}: {}'.format(ids[i], tvec))
-            if ids[i] == 3:
-              id_3 = tvec
-              self.create_frames(tvec, rvec, 'marker_3', 'camera_color_optical_frame')
-              self.create_frames([0, 0.036, 0], [0, 0, 0], 'detected_tool', 'marker_3')
-            if ids[i] == 4:
-              id_4 = np.array(tvec)
-            if ids[i] == 7:
-              id_7 = np.array(tvec)
-            if ids[i] == 2:
-              id_2 = np.array(tvec)
+
             if self.marker_data[self.data_to_use]['name'] == 'rob':
               if tvec[2] > 1:
                 if self.create_camera:
@@ -191,15 +196,12 @@ class CameraInfoReader:
                   new_mat = np.eye(4)
                   new_mat[:3,:3] = np.copy(new_rot_mat[:3,:3])
                   new_quat = quaternion_from_matrix(new_mat)
-                  # print(new_tvec)
-                  # print(new_quat)
-                  self.create_frames(new_tvec, new_quat, 'camera_color_optical_frame', 'aruco_base',quat=True)
+                  self.create_frames(new_tvec, new_quat, self.frame + '_color_optical_frame', 'aruco_base',quat=True)
                 else:
-                  self.create_frames(tvec, rvec, 'detected_base', 'camera_color_optical_frame')
+                  self.create_frames(tvec, rvec, 'aruco_base', self.frame + '_color_optical_frame')
             if self.marker_data[self.data_to_use]['name'] == 'big_grip':
               if tvec[2] <= 1.2:
-                # print('Here')
-                self.create_frames(tvec, rvec, 'marker_3', 'camera_color_optical_frame')
+                self.create_frames(tvec, rvec, 'marker_3', self.frame + '_color_optical_frame')
             if self.marker_data[self.data_to_use]['name']== 'small_single_grip':
               if tvec[2] <= 1.2:
                 quat = self.rodrigues_to_quaternion(rvec)
@@ -215,12 +217,6 @@ class CameraInfoReader:
                 new_quat = quaternion_from_matrix(new_mat)
                 new_rvec = self.quaternion_to_rodrigues(new_quat)
                 cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients, new_rvec, tvec, 0.1)
-                # self.create_frames(tvec, quat, 'marker_3', 'camera_color_optical_frame', quat=True)
-                self.create_frames(new_tvec, new_quat, 'marker_3', 'camera_color_optical_frame', quat=True)
-        
-        if self.marker_data[self.data_to_use]['name'] == 'grip':
-          print("horizontal  = ", np.linalg.norm(id_4 - id_3))
-          print("vertical  = ", np.linalg.norm(id_4 - id_7))
 
     return frame
 
@@ -303,30 +299,16 @@ class CameraInfoReader:
         quat = val[3:]
         trans = np.array(val[:3])
         mat = quaternion_matrix(quat)[:3,:3]
-        # hom_mat = np.eye(4)
-        # hom_mat[:3,:3] = mat
-        # hom_mat[:3,-1] = val[:3]
-        # hom_mat = np.linalg.inv(hom_mat)
-        # mat = hom_mat[:3,:3]
-        # trans = hom_mat[:3,-1]
-        # print(hom_mat)
         R_target2cam.append(mat)
         t_target2cam.append(trans)
-      # n = np.random.random_integers(0, len(R_gripper2base)-1,4)
       n = np.arange(start=0, stop=len(R_gripper2base), step=1)
-      # print(n)
       t_target2cam = np.array(t_target2cam)
       R_target2cam = np.array(R_target2cam)
       R_target2gripper, t_target2gripper = cv2.calibrateHandEye(R_gripper2base[n], t_gripper2base[n], R_target2cam[n], t_target2cam[n], method=cv2.CALIB_HAND_EYE_TSAI)
-      # print(R_target2gripper)
-      # print(t_target2gripper)
       rot_mat = np.eye(4)
       rot_mat[:3,:3] = R_target2gripper
       quat = quaternion_from_matrix(rot_mat).flatten()
       tvec = t_target2gripper.flatten()
-      # tvec = np.dot(-R_target2gripper.T, t_target2gripper).flatten()
-      # print("tvec = ", tvec)
-      # print("quat = ", quat)
       self.create_frames(tvec, quat, 'estimated_marker', 'gripper_tip_link', quat=True)
 
   
@@ -335,6 +317,10 @@ class CameraInfoReader:
 
 
 if __name__ == '__main__':
-  reader = CameraInfoReader()
-  # reader.calculate_hand_eye_transformation()
+  rospy.init_node('get_transformations', anonymous=True)
+  frame_choice = input('choose number from 1.realsense, 2.astra\n')
+  frame = 'camera' if frame_choice == '1' else 'astra'
+  data_to_use = input('choose number from 1.rob, 2.grip, 3.big_grip, 4.small_single_grip\n')
+  reader = CameraInfoReader(frame, data_to_use)
+  rospy.Subscriber('/' + frame + '/color/image_raw', Image, reader.image_callback)
   rospy.spin()
